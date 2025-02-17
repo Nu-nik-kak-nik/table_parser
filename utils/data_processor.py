@@ -72,12 +72,13 @@ class DataProcessor:
             r'\+7-\d{3}-\d{3}-\d{2}-\d{2}',
             r'Депозит',
             r'Скидка',
+            r'^(От \d+шт)',
         ]
 
-        smartphone_patterns = [
-            r'\b(смартфон|телефон)\b',
-            r'\b(samsung|iphone|xiaomi|honor)\b',
-            r'\b(galaxy|z fold|fold)\b'
+        allowed_patterns = [
+            r'\b(airpods)\b',
+            r'\b(iphone|ipad|samsung|xiaomi|honor)\b',
+            r'\b(se2|se)\b',
         ]
 
         for pattern in invalid_patterns:
@@ -86,7 +87,7 @@ class DataProcessor:
 
         return any(
             re.search(pattern, product_name, re.IGNORECASE)
-            for pattern in smartphone_patterns
+            for pattern in allowed_patterns
         )
 
     def _parse_supplier_products(self, supplier_products):
@@ -162,10 +163,11 @@ class DataProcessor:
     @staticmethod
     def _extract_price(product_name: str):
         """Извлекает цену из названия товара поставщика."""
+        # Расширенные паттерны для поиска цены
         price_patterns = [
+            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)?$',
             r'(\d{4,5})\s*[₽$]',
-            r'\s(\d{4,5})\s',
-            r'[^\d](\d{4,5})$'
+            r'\b(\d{4,5})\b',
         ]
 
         for pattern in price_patterns:
@@ -173,10 +175,12 @@ class DataProcessor:
             if match:
                 try:
                     price = int(match.group(1))
-                    if 1000 <= price <= 2000000:
+                    if 1000 <= price <= 200000:
                         return price
                 except (ValueError, TypeError):
                     continue
+
+        return None
 
     def _match_suppliers(self, supplier_data, product_dict, product_name):
         """Сопоставляет товары поставщиков с товарами магазина."""
