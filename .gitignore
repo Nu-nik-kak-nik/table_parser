@@ -1,0 +1,9 @@
+.env
+*.json
+*.log
+venv/
+env/
+.idea/
+__pycache__/
+utils/was/
+*.xml
