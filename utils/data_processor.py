@@ -16,7 +16,6 @@ class DataProcessor:
     def process_data(self):
         """Основной метод обработки данных."""
         try:
-            # Чтение данных
             if self.config.USE_LOCAL_FILES:
                 shop_products = FileReader.read_csv(self.config.SHOP_PRODUCTS_FILE)
                 supplier_products = FileReader.read_csv(self.config.SUPPLIER_PRODUCTS_FILE)
@@ -30,11 +29,9 @@ class DataProcessor:
             self.logger.info(
                 f"Загружено {len(shop_products)} товаров магазина и {len(supplier_products)} товаров поставщиков.")
 
-            # Обработка данных поставщиков
             supplier_data = self._parse_supplier_products(supplier_products)
             self.logger.info(f"Обработано {len(supplier_data)} товаров поставщиков.")
 
-            # Сопоставление товаров
             matched_products = []
             for shop_product in shop_products:
                 if 'Наименование' not in shop_product:
@@ -44,21 +41,17 @@ class DataProcessor:
                 product_name = shop_product['Наименование']
                 external_code = shop_product.get('Внешний код', 'N/A')
 
-                # Используем метод get_dictionary из dictionary_handler
                 product_dict = self.dictionary_handler.get_dictionary(product_name)
                 self.logger.info(f"Создан словарь для товара: {product_name}, Ключевые слова: {product_dict}")
 
-                # Передаем product_name в _match_suppliers
                 matched_suppliers = self._match_suppliers(supplier_data, product_dict, product_name)
                 self.logger.info(f"Найдено {len(matched_suppliers)} совпадений для товара: {product_name}")
 
-                # Формирование строки итоговой таблицы
                 row = {
                     'Наше название': product_name,
                     'Внешний код': external_code
                 }
 
-                # Добавляем данные поставщиков
                 for i, supplier in enumerate(matched_suppliers, start=1):
                     row[f'Цена {i}'] = supplier['Цена']
                     row[f'Поставщик {i}'] = supplier['Поставщик']
@@ -75,14 +68,12 @@ class DataProcessor:
     @staticmethod
     def _is_valid_product(product_name: str) -> bool:
         """Проверяет, является ли строка корректным товаром."""
-        # Исключаем строки, содержащие номера телефонов, депозиты и т.д.
         invalid_patterns = [
-            r'\+7-\d{3}-\d{3}-\d{2}-\d{2}',  # Номер телефона
-            r'Депозит',  # Депозит
-            r'Скидка',  # Скидка
+            r'\+7-\d{3}-\d{3}-\d{2}-\d{2}',
+            r'Депозит',
+            r'Скидка',
         ]
 
-        # Проверяем, что это похоже на смартфон
         smartphone_patterns = [
             r'\b(смартфон|телефон)\b',
             r'\b(samsung|iphone|xiaomi|honor)\b',
@@ -93,7 +84,6 @@ class DataProcessor:
             if re.search(pattern, product_name, re.IGNORECASE):
                 return False
 
-        # Проверяем, что это точно смартфон
         return any(
             re.search(pattern, product_name, re.IGNORECASE)
             for pattern in smartphone_patterns
@@ -105,23 +95,18 @@ class DataProcessor:
         current_supplier = None
 
         for row in supplier_products:
-            # Обработка различных вариантов наименования столбцов
             product_name = (
                     row.get('прайс', '') or
                     row.get('Наименование', '') or
                     row.get('название', '')
             ).strip()
 
-            # Пропускаем пустые строки
             if not product_name:
                 continue
 
-            # Специальная обработка для AirPods и других электронных устройств
             if product_name.startswith('🎧'):
-                # Удаляем эмодзи и лишние пробелы
                 product_name = product_name.replace('🎧', '').strip()
 
-            # Извлечение поставщика
             supplier = (
                     row.get('поставщик', '') or
                     row.get('Поставщик', '') or
@@ -129,10 +114,8 @@ class DataProcessor:
                     'Неизвестный'
             ).strip()
 
-            # Попытка извлечь цену
             price = self._extract_price(product_name)
 
-            # Если цена не найдена, пробуем найти в отдельном столбце
             if price is None:
                 price_columns = ['цена', 'Цена', 'price']
                 for col in price_columns:
@@ -143,19 +126,15 @@ class DataProcessor:
                         except ValueError:
                             continue
 
-            # Если цена всё еще не найдена, пропускаем товар
             if price is None:
                 self.logger.warning(f"Не удалось извлечь цену для товара: {product_name}")
                 continue
 
-            # Проверка на валидность товара с расширенной логикой
             if not self._is_valid_product(product_name):
-                # Добавляем специальную обработку для AirPods и других устройств
                 if 'airpods' not in product_name.lower():
                     self.logger.warning(f"Пропущен некорректный товар: {product_name}")
                     continue
 
-            # Добавляем товар в список
             supplier_data.append({
                 'Поставщик': supplier,
                 'Название': product_name,
@@ -203,10 +182,8 @@ class DataProcessor:
         """Сопоставляет товары поставщиков с товарами магазина."""
         matched = []
 
-        # Извлекаем ключевые слова
         keywords = self._clean_keywords(product_name)
 
-        # Извлечение конфигурации памяти
         memory_pattern = re.search(r'(\d+/\d+)\s*(?:GB|ГБ)', product_name, re.IGNORECASE)
         memory_config = memory_pattern.group(1) if memory_pattern else None
 
@@ -214,31 +191,27 @@ class DataProcessor:
         for supplier_product in supplier_data:
             supplier_name = supplier_product['Название'].lower()
 
-            # Расширенная проверка ключевых слов
             keyword_matches = sum(
                 keyword in supplier_name
                 for keyword in keywords
             )
 
-            # Проверка памяти
             memory_match = (
                     memory_config and
                     memory_config in supplier_name
             ) if memory_config else False
 
-            # Оценка совпадения
             match_score = (
-                    keyword_matches * 0.5 +  # Вес ключевых слов
-                    (memory_match * 2)  # Дополнительный вес за память
+                    keyword_matches * 0.5 +
+                    (memory_match * 2)
             )
 
-            if match_score > 1:  # Настраиваемый порог совпадения
+            if match_score > 1:
                 potential_matches.append({
                     'product': supplier_product,
                     'score': match_score
                 })
 
-        # Сортировка и фильтрация совпадений (как в предыдущей версии)
         if potential_matches:
             sorted_matches = sorted(
                 potential_matches,
@@ -246,7 +219,6 @@ class DataProcessor:
                 reverse=True
             )
 
-            # Выбор уникальных цен
             unique_prices = {}
             unique_suppliers = set()
             for match in sorted_matches:
@@ -264,7 +236,6 @@ class DataProcessor:
                 if len(matched) >= 5:
                     break
 
-        # Логирование результатов
         self.logger.info(f"Найдено {len(matched)} совпадений для товара: {product_name}")
         for m in matched:
             self.logger.info(f"Поставщик: {m['Поставщик']}, Цена: {m['Цена']}")
@@ -279,28 +250,22 @@ class DataProcessor:
 
     @staticmethod
     def _clean_keywords(product_name: str) -> list:
-        # Полное удаление слова "смартфон" в любом регистре
         name_lower = re.sub(r'\bсмартфон\b', '', product_name.lower(), flags=re.IGNORECASE)
 
-        # Расширенный список стоп-слов
         extended_stop_words = {
             'смартфон', 'smartfon', 'smartphone', 'phone', 'телефон',
             'mobile', 'мобильный', 'сотовый', 'смартфоны'
         }
 
-        # Разбиваем на слова
         words = name_lower.split()
 
-        # Список для финальных ключевых слов
         final_keywords = []
 
         for word in words:
-            # Разбор памяти с разделителем "/"
             if '/' in word:
                 memory_parts = word.split('/')
                 final_keywords.extend([f"{part}gb" for part in memory_parts])
             else:
-                # Фильтрация обычных слов
                 if (
                         word not in extended_stop_words and
                         len(word) > 2 and

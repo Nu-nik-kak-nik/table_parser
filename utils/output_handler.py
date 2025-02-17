@@ -19,7 +19,6 @@ class OutputHandler:
             for item in data:
                 fieldnames.update(item.keys())
 
-            # Упорядочиваем столбцы: "Наше название", "Внешний код", затем пары "Цена X" и "Поставщик X"
             ordered_fieldnames = ['Наше название', 'Внешний код']
             price_columns = sorted([col for col in fieldnames if col.startswith('Цена')],
                                    key=lambda x: int(x.split()[1]))
