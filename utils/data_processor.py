@@ -1,9 +1,8 @@
 import re
-
+from typing import List, Dict
 from config import Config
 from utils.dictionary_handler import DictionaryHandler
 from utils.file_reader import FileReader
-from utils.google_sheets import GoogleSheetsHandler
 from utils.logger import Logger
 
 
@@ -65,109 +64,74 @@ class DataProcessor:
             self.logger.error(f"Ошибка при обработке данных: {e}")
             return []
 
-    @staticmethod
-    def _is_valid_product(product_name: str) -> bool:
-        """Проверяет, является ли строка корректным товаром."""
-        invalid_patterns = [
-            r'\+7-\d{3}-\d{3}-\d{2}-\d{2}',
-            r'Депозит',
-            r'Скидка',
-            r'^(От \d+шт)',
-        ]
-
-        allowed_patterns = [
-            r'\b(airpods)\b',
-            r'\b(iphone|ipad|samsung|xiaomi|honor)\b',
-            r'\b(se2|se)\b',
-        ]
-
-        for pattern in invalid_patterns:
-            if re.search(pattern, product_name, re.IGNORECASE):
-                return False
-
-        return any(
-            re.search(pattern, product_name, re.IGNORECASE)
-            for pattern in allowed_patterns
-        )
-
-    def _parse_supplier_products(self, supplier_products):
-        """Парсит данные поставщиков и возвращает список словарей с товарами."""
+    def _parse_supplier_products(self, supplier_products: List[Dict]) -> List[Dict]:
+        """Расширенный парсинг данных поставщиков."""
         supplier_data = []
-        current_supplier = None
+        supplier_columns = ['поставщик', 'Поставщик', 'supplier', 'Supplier']
+        name_columns = ['прайс', 'Наименование', 'название', 'name']
 
         for row in supplier_products:
-            product_name = (
-                    row.get('прайс', '') or
-                    row.get('Наименование', '') or
-                    row.get('название', '')
-            ).strip()
+            # Стратегия 1: Определение поставщика
+            supplier = self._extract_supplier(row, supplier_columns)
 
-            if not product_name:
+            # Стратегия 2: Извлечение названия товара
+            product_name = self._extract_product_name(row, name_columns)
+
+            if not product_name or not supplier:
                 continue
 
-            if product_name.startswith('🎧'):
-                product_name = product_name.replace('🎧', '').strip()
-
-            supplier = (
-                    row.get('поставщик', '') or
-                    row.get('Поставщик', '') or
-                    current_supplier or
-                    'Неизвестный'
-            ).strip()
-
+            # Стратегия 3: Извлечение цены
             price = self._extract_price(product_name)
 
             if price is None:
-                price_columns = ['цена', 'Цена', 'price']
-                for col in price_columns:
-                    if col in row and row[col]:
-                        try:
-                            price = int(row[col])
-                            break
-                        except ValueError:
-                            continue
-
-            if price is None:
-                self.logger.warning(f"Не удалось извлечь цену для товара: {product_name}")
                 continue
 
-            if not self._is_valid_product(product_name):
-                if 'airpods' not in product_name.lower():
-                    self.logger.warning(f"Пропущен некорректный товар: {product_name}")
-                    continue
+            # Дополнительные фильтры и обработка
+            product_name = self._clean_product_name(product_name)
+
+            # Расширенная валидация товара
+            if not self._is_valid_product_advanced(product_name, supplier):
+                continue
 
             supplier_data.append({
                 'Поставщик': supplier,
                 'Название': product_name,
                 'Цена': price
             })
+
             self.logger.info(f"Добавлен товар: {product_name}, Цена: {price}, Поставщик: {supplier}")
 
         return supplier_data
 
     @staticmethod
-    def _is_supplier_header(product_name):
-        """Проверяет, является ли строка заголовком поставщика."""
-        return '[' in product_name and ']' in product_name
+    def _extract_supplier(row: Dict, supplier_columns: List[str]) -> str:
+        """Извлечение поставщика с множественными стратегиями."""
+        for col in supplier_columns:
+            if col in row and row[col]:
+                supplier = str(row[col]).strip()
+                if supplier:
+                    return supplier
+
+        return 'Неизвестный'
 
     @staticmethod
-    def _extract_supplier_name(supplier_name):
-        """Извлекает название поставщика из строки."""
-        return supplier_name.strip()
+    def _extract_product_name(row: Dict, name_columns: List[str]) -> str | None:
+        """Извлечение названия товара с множественными стратегиями."""
+        for col in name_columns:
+            if col in row and row[col]:
+                name = str(row[col]).strip()
+                if name and len(name) > 3:
+                    return name
+
+        return None
 
     @staticmethod
-    def _is_product_with_price(product_name):
-        """Проверяет, содержит ли строка товар и цену."""
-        return any(char.isdigit() for char in product_name)
-
-    @staticmethod
-    def _extract_price(product_name: str):
-        """Извлекает цену из названия товара поставщика."""
-        # Расширенные паттерны для поиска цены
+    def _extract_price(product_name: str) -> int | None:
+        """Извлечение цены из названия товара."""
         price_patterns = [
-            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)?$',
-            r'(\d{4,5})\s*[₽$]',
-            r'\b(\d{4,5})\b',
+            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)?$',  # Число в конце строки
+            r'(\d{4,5})\s*[₽$]',  # Число с валютой
+            r'\b(\d{4,5})\b',  # Число между словами
         ]
 
         for pattern in price_patterns:
@@ -182,7 +146,45 @@ class DataProcessor:
 
         return None
 
-    def _match_suppliers(self, supplier_data, product_dict, product_name):
+    @staticmethod
+    def _clean_product_name(product_name: str) -> str:
+        """Очистка названия товара."""
+        # Удаление эмодзи
+        product_name = re.sub(r'[^\w\s()]', '', product_name)
+
+        # Удаление лишних пробелов
+        product_name = ' '.join(product_name.split())
+
+        return product_name
+
+    @staticmethod
+    def _is_valid_product_advanced(product_name: str, supplier: str) -> bool:
+        """Расширенная валидация товара с учетом поставщика."""
+        # Список ключевых слов для разных поставщиков
+        supplier_keywords = {
+            'HI': ['iphone', 'airpods', 'ipad'],
+            'DNS': ['смартфон', 'телефон'],
+            'М.Видео': ['apple', 'samsung'],
+        }
+
+        # Общие стоп-слова
+        stop_words = ['скидка', 'депозит', 'от \d+шт']
+
+        # Проверка стоп-слов
+        for word in stop_words:
+            if re.search(word, product_name, re.IGNORECASE):
+                return False
+
+        # Проверка по keywords поставщика
+        if supplier in supplier_keywords:
+            return any(
+                keyword.lower() in product_name.lower()
+                for keyword in supplier_keywords[supplier]
+            )
+
+        return True
+
+    def _match_suppliers(self, supplier_data: List[Dict], product_dict: List[str], product_name: str) -> List[Dict]:
         """Сопоставляет товары поставщиков с товарами магазина."""
         matched = []
 
@@ -230,54 +232,17 @@ class DataProcessor:
                 supplier = match['product']['Поставщик']
 
                 if price not in unique_prices and supplier not in unique_suppliers:
-                    unique_prices[price] = match['product']
+                    matched.append(match['product'])
+                    unique_prices[price] = True
                     unique_suppliers.add(supplier)
-                    matched.append({
-                        'Поставщик': supplier,
-                        'Цена': price
-                    })
 
-                if len(matched) >= 5:
+                if len(matched) >= 3:
                     break
-
-        self.logger.info(f"Найдено {len(matched)} совпадений для товара: {product_name}")
-        for m in matched:
-            self.logger.info(f"Поставщик: {m['Поставщик']}, Цена: {m['Цена']}")
 
         return matched
 
     @staticmethod
-    def _contains_all_keywords(supplier_product_name, product_dict, threshold=0.5):
-        """Проверяет, содержит ли товар поставщика достаточно ключевых слов."""
-        matched_keywords = sum(keyword in supplier_product_name for keyword in product_dict)
-        return matched_keywords / len(product_dict) >= threshold
-
-    @staticmethod
-    def _clean_keywords(product_name: str) -> list:
-        name_lower = re.sub(r'\bсмартфон\b', '', product_name.lower(), flags=re.IGNORECASE)
-
-        extended_stop_words = {
-            'смартфон', 'smartfon', 'smartphone', 'phone', 'телефон',
-            'mobile', 'мобильный', 'сотовый', 'смартфоны'
-        }
-
-        words = name_lower.split()
-
-        final_keywords = []
-
-        for word in words:
-            if '/' in word:
-                memory_parts = word.split('/')
-                final_keywords.extend([f"{part}gb" for part in memory_parts])
-            else:
-                if (
-                        word not in extended_stop_words and
-                        len(word) > 2 and
-                        not word.isdigit() and
-                        not re.match(r'\d+gb', word)
-                ):
-                    final_keywords.append(word)
-
-        return list(set(final_keywords))
-
-
+    def _clean_keywords(product_name: str) -> List[str]:
+        """Очищает ключевые слова от лишних символов."""
+        cleaned = re.sub(r'[(),]', ' ', product_name)
+        return [word.strip().lower() for word in cleaned.split() if word.strip()]
