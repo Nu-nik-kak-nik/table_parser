@@ -76,7 +76,6 @@ class DataProcessor:
                 'Внешний код': external_code
             }
 
-            # Добавляем всех подходящих поставщиков
             for i, supplier in enumerate(matched_suppliers, start=1):
                 row[f'Цена {i}'] = supplier['Цена']
                 row[f'Поставщик {i}'] = supplier['Поставщик']
@@ -87,7 +86,7 @@ class DataProcessor:
 
     def _parse_supplier_products(self, supplier_products: List[Dict]) -> List[Dict]:
         supplier_data = []
-        unique_products = set()  # Для отслеживания уникальных комбинаций
+        unique_products = set()
 
         supplier_columns = ['поставщик', 'Поставщик', 'supplier', 'Supplier']
         name_columns = [
@@ -97,32 +96,25 @@ class DataProcessor:
         price_columns = ['Цена', 'цена', 'price', 'Price', 'стоимость']
 
         for row in supplier_products:
-            # Расширенный поиск поставщика
             supplier = self._extract_supplier(row, supplier_columns)
 
-            # Расширенный поиск названия
             product_name = self._extract_product_name(row, name_columns)
 
             if not product_name or not supplier:
                 continue
 
-            # Извлечение цены с ориентиром на конец строки
             price = self._extract_price_at_end(row, product_name)
 
             if price is None:
                 continue
 
-            # Очистка названия с сохранением информативности
             product_name = self._clean_product_name(product_name)
 
-            # Более мягкая валидация
             if len(product_name) < 3:
                 continue
 
-            # Создаем уникальный ключ для фильтрации дубликатов
             product_key = f"{supplier}_{product_name}_{price}"
 
-            # Добавляем только уникальные товары
             if product_key not in unique_products:
                 unique_products.add(product_key)
                 supplier_data.append({
@@ -228,7 +220,6 @@ class DataProcessor:
         matched = []
         keywords = self._clean_keywords(product_name)
 
-        # Извлекаем характеристики (например, цвет, объём памяти)
         memory_pattern = re.search(r'(\d+/\d+)\s*(?:GB|ГБ)', product_name, re.IGNORECASE)
         memory_config = memory_pattern.group(1) if memory_pattern else None
 
@@ -238,16 +229,13 @@ class DataProcessor:
         for supplier_product in supplier_data:
             supplier_name = supplier_product['Название'].lower()
 
-            # Используем расстояние Левенштейна для сравнения названий
             similarity = SequenceMatcher(None, product_name.lower(), supplier_name).ratio()
 
-            # Считаем совпадения ключевых слов
             keyword_matches = sum(
                 keyword in supplier_name
                 for keyword in keywords
             )
 
-            # Проверяем совпадение характеристик (память, цвет)
             memory_match = (
                     memory_config and
                     memory_config in supplier_name
@@ -258,15 +246,14 @@ class DataProcessor:
                     color in supplier_name
             ) if color else False
 
-            # Вычисляем общий score
             match_score = (
-                    similarity * 0.7 +  # Увеличиваем вес схожести
-                    keyword_matches * 0.2 +  # Уменьшаем вес ключевых слов
-                    (memory_match * 0.05) +  # Учитываем память
-                    (color_match * 0.05)  # Учитываем цвет
+                    similarity * 0.7 +
+                    keyword_matches * 0.2 +
+                    (memory_match * 0.05) +
+                    (color_match * 0.05)
             )
 
-            if match_score > 0.6:  # Повышаем порог
+            if match_score > 0.6:
                 matched.append(supplier_product)
 
         return matched
@@ -276,7 +263,6 @@ class DataProcessor:
         """Очищает ключевые слова от лишних символов и разделяет значения по слешу."""
         product_name = re.sub(r'\s\d{4,5}\s*(?:₽|руб|rub|\$)?$', '', product_name)
 
-        # Удаляем "+", если он окружен пробелами
         product_name = re.sub(r'\s\+\s', ' ', product_name)
 
         parts = re.split(r'[/]', product_name)
@@ -285,7 +271,6 @@ class DataProcessor:
             part = re.sub(r'[^\w\s.+]', '', part)
             keywords.extend([word.strip().lower() for word in part.split() if word.strip()])
 
-        # Добавляем синонимы
         synonyms = {
             'type-c': 'usb-c',
             'wi-fi': 'wifi',
@@ -302,8 +287,8 @@ class DataProcessor:
     def _extract_price_at_end(row: Dict, product_name: str) -> int | None:
         """Извлечение цены с ориентиром на конец строки."""
         price_patterns = [
-            r'(\d{4,5})\s*(?:₽|руб|rub|\$)?$',  # Цена в конце строки
-            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)$',  # С пробелом перед ценой
+            r'(\d{4,5})\s*(?:₽|руб|rub|\$)?$',
+            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)$',
         ]
 
         for pattern in price_patterns:
@@ -312,13 +297,11 @@ class DataProcessor:
                 try:
                     price = int(match.group(1))
                     if 1000 <= price <= 300000:
-                        # Удаляем цену из названия
                         product_name = re.sub(pattern, '', product_name).strip()
                         return price
                 except (ValueError, TypeError):
                     continue
 
-        # Резервный метод извлечения цены из столбцов
         price_columns = ['Цена', 'цена', 'price', 'Price']
         for col in price_columns:
             if col in row and row[col]:
