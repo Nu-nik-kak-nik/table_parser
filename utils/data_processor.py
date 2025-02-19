@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from difflib import SequenceMatcher
 
@@ -29,7 +29,7 @@ class DataProcessor:
                 return []
 
             self.logger.info(
-                f"Загружено {len(shop_products)} товаров магазина и {len(supplier_products)} товаров поставщиков.")
+                f"Загружено {len(shop_products)} товаров магазина и {len(supplier_products)} строк из таблицы поставщиков.")
 
             supplier_data = self._parse_supplier_products(supplier_products)
             self.logger.info(f"Обработано {len(supplier_data)} товаров поставщиков.")
@@ -124,7 +124,7 @@ class DataProcessor:
                 })
 
         self.logger.info(
-            f"Обработано {len(supplier_products)} исходных товаров, оставлено {len(supplier_data)} уникальных.")
+            f"Обработано {len(supplier_products)} исходных строк товаров, оставлено {len(supplier_data)} уникальных.")
         return supplier_data
 
     @staticmethod
@@ -216,18 +216,20 @@ class DataProcessor:
         return len(product_name) > 3
 
     def _match_suppliers(self, supplier_data: List[Dict], product_dict: List[str], product_name: str) -> List[Dict]:
-        """Сопоставляет товары поставщиков с товарами магазина."""
+        """Сопоставляет товары поставщиков с товарами магазина с учетом цвета."""
         matched = []
+        unique_suppliers = {}
         keywords = self._clean_keywords(product_name)
+
+        # Извлечение цвета из названия магазина
+        shop_color = self._extract_color(product_name)
 
         memory_pattern = re.search(r'(\d+/\d+)\s*(?:GB|ГБ)', product_name, re.IGNORECASE)
         memory_config = memory_pattern.group(1) if memory_pattern else None
 
-        color_pattern = re.search(r'\b(black|white|blue|red|green|silver|gold)\b', product_name, re.IGNORECASE)
-        color = color_pattern.group(0) if color_pattern else None
-
         for supplier_product in supplier_data:
             supplier_name = supplier_product['Название'].lower()
+            supplier_color = self._extract_color(supplier_name)
 
             similarity = SequenceMatcher(None, product_name.lower(), supplier_name).ratio()
 
@@ -241,22 +243,46 @@ class DataProcessor:
                     memory_config in supplier_name
             ) if memory_config else False
 
+            # Проверка совпадения цветов
             color_match = (
-                    color and
-                    color in supplier_name
-            ) if color else False
-
-            match_score = (
-                    similarity * 0.7 +
-                    keyword_matches * 0.2 +
-                    (memory_match * 0.05) +
-                    (color_match * 0.05)
+                    shop_color is None or  # Если цвет не указан в магазине
+                    supplier_color is None or  # Если цвет не указан у поставщика
+                    self._colors_match(shop_color, supplier_color)  # Точное совпадение цветов
             )
 
-            if match_score > 0.6:
-                matched.append(supplier_product)
+            match_score = (
+                    keyword_matches * 0.4 +
+                    (color_match * 0.3) +
+                    (memory_match * 0.3) +
+                    similarity * 0.1
+            )
+            if match_score > 1 and color_match > 0.6 and memory_match > 0.7 and keyword_matches > 0.8:
+                matched.append({
+                    **supplier_product,
+                    'match_score': match_score
+                })
 
-        return matched
+        # Сортировка по match_score и ограничение до 10 лучших
+        matched = sorted(matched, key=lambda x: x['match_score'], reverse=True)[:10]
+
+        for item in matched:
+            supplier = item.get('Поставщик')
+
+            # Если такого поставщика еще нет
+            if supplier not in unique_suppliers:
+                unique_suppliers[supplier] = item
+            else:
+                # Сравниваем по количеству совпадений, а не по цене
+                current_match_score = len(set(product_dict) & set(item.get('Описание', '').split()))
+                existing_match_score = len(
+                    set(product_dict) & set(unique_suppliers[supplier].get('Описание', '').split()))
+
+                # Обновляем, если новое предложение лучше совпадает
+                if current_match_score > existing_match_score:
+                    unique_suppliers[supplier] = item
+
+        # Возвращаем список ВСЕХ уникальных предложений
+        return list(unique_suppliers.values())
 
     @staticmethod
     def _clean_keywords(product_name: str) -> List[str]:
@@ -297,7 +323,7 @@ class DataProcessor:
                 try:
                     price = int(match.group(1))
                     if 1000 <= price <= 300000:
-                        product_name = re.sub(pattern, '', product_name).strip()
+                        product_name = str(re.sub(pattern, '', str(product_name))).strip()
                         return price
                 except (ValueError, TypeError):
                     continue
@@ -313,3 +339,57 @@ class DataProcessor:
                     continue
 
         return None
+
+    @staticmethod
+    def _extract_color(text: str) -> Optional[str]:
+        """Извлекает цвет из текста."""
+        color_patterns = [
+            r'\(([^)]+)\)',  # В скобках
+            r'\s([^\s]+)$',  # После последнего пробела
+            r'\s([^\s]+)\s*(?:EAC|RU|EU)'  # Перед сертификатами
+        ]
+
+        color_mapping = {
+            # Русские цвета
+            'серый': ['grey', 'gray', 'titanium', 'графит'],
+            'черный': ['black', 'space black', 'космический черный'],
+            'белый': ['white', 'silver'],
+            'синий': ['blue', 'navy'],
+            'зеленый': ['green', 'forest green'],
+            'красный': ['red', 'crimson'],
+            'золотой': ['gold', 'champagne'],
+            'розовый': ['pink', 'rose gold'],
+            'фиолетовый': ['purple', 'lavender']
+        }
+
+        for pattern in color_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                color = match.group(1).strip().lower()
+
+                # Проверка на прямое совпадение
+                for russian, variants in color_mapping.items():
+                    if color == russian.lower() or color in [v.lower() for v in variants]:
+                        return russian
+
+        return None
+
+    @staticmethod
+    def _colors_match(color1: Optional[str], color2: Optional[str]) -> bool:
+        """Проверяет совпадение цветов."""
+        if color1 is None or color2 is None:
+            return True
+
+        color_mapping = {
+            'серый': ['grey', 'gray', 'titanium', 'графит'],
+            'черный': ['black', 'space black', 'космический черный'],
+            'белый': ['white', 'silver'],
+            # Другие цвета...
+        }
+
+        # Проверка на прямое совпадение или наличие общих синонимов
+        return (
+                color1 == color2 or
+                color1.lower() in color_mapping.get(color2, []) or
+                color2.lower() in color_mapping.get(color1, [])
+        )
