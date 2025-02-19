@@ -59,11 +59,10 @@ class DataProcessor:
         return [row for row in supplier_products if any(row.values())]
 
     def _match_products(self, shop_products: List[Dict], supplier_data: List[Dict]) -> List[Dict]:
-        """Сопоставление товаров склада и поставщиков."""
+        """Сопоставляет товары магазина с товарами поставщиков."""
         matched_products = []
         for shop_product in shop_products:
             if 'Наименование' not in shop_product:
-                self.logger.warning(f"Отсутствует столбец 'Наименование' в товаре: {shop_product}")
                 continue
 
             product_name = shop_product['Наименование']
@@ -77,6 +76,7 @@ class DataProcessor:
                 'Внешний код': external_code
             }
 
+            # Добавляем всех подходящих поставщиков
             for i, supplier in enumerate(matched_suppliers, start=1):
                 row[f'Цена {i}'] = supplier['Цена']
                 row[f'Поставщик {i}'] = supplier['Поставщик']
@@ -86,36 +86,53 @@ class DataProcessor:
         return matched_products
 
     def _parse_supplier_products(self, supplier_products: List[Dict]) -> List[Dict]:
-        """Расширенный парсинг данных поставщиков."""
         supplier_data = []
+        unique_products = set()  # Для отслеживания уникальных комбинаций
+
         supplier_columns = ['поставщик', 'Поставщик', 'supplier', 'Supplier']
-        name_columns = ['прайс', 'Наименование', 'название', 'name']
+        name_columns = [
+            'прайс', 'Наименование', 'название', 'name',
+            'Товар', 'product', 'Product', 'item'
+        ]
+        price_columns = ['Цена', 'цена', 'price', 'Price', 'стоимость']
 
         for row in supplier_products:
+            # Расширенный поиск поставщика
             supplier = self._extract_supplier(row, supplier_columns)
+
+            # Расширенный поиск названия
             product_name = self._extract_product_name(row, name_columns)
 
             if not product_name or not supplier:
                 continue
 
-            price = self._extract_price(row, product_name)
+            # Извлечение цены с ориентиром на конец строки
+            price = self._extract_price_at_end(row, product_name)
 
             if price is None:
                 continue
 
+            # Очистка названия с сохранением информативности
             product_name = self._clean_product_name(product_name)
 
-            if not self._is_valid_product_advanced(product_name, supplier):
+            # Более мягкая валидация
+            if len(product_name) < 3:
                 continue
 
-            supplier_data.append({
-                'Поставщик': supplier,
-                'Название': product_name,
-                'Цена': price
-            })
+            # Создаем уникальный ключ для фильтрации дубликатов
+            product_key = f"{supplier}_{product_name}_{price}"
 
-            self.logger.info(f"Добавлен товар: {product_name}, Цена: {price}, Поставщик: {supplier}")
+            # Добавляем только уникальные товары
+            if product_key not in unique_products:
+                unique_products.add(product_key)
+                supplier_data.append({
+                    'Поставщик': supplier,
+                    'Название': product_name,
+                    'Цена': price
+                })
 
+        self.logger.info(
+            f"Обработано {len(supplier_products)} исходных товаров, оставлено {len(supplier_data)} уникальных.")
         return supplier_data
 
     @staticmethod
@@ -185,15 +202,14 @@ class DataProcessor:
 
     @staticmethod
     def _is_valid_product_advanced(product_name: str, supplier: str) -> bool:
-        """Расширенная валидация товара с учетом поставщика."""
         supplier_keywords = {
-            'HI': ['AirPods', 'iPhone', 'iPad', 'Watch', 'Mac'],
-            'MiHonor': ['Samsung', 'Xiaomi', 'Redmi', 'Apple'],
-            'YouTakeAll': ['Google', 'Samsung', 'Pixel', 'Apple'],
-            '112пав': ['iPhone', 'AirPods', 'iPad', 'Samsung']
+            'HI': ['AirPods', 'iPhone', 'iPad', 'Watch', 'Mac', 'Samsung', 'Xiaomi'],
+            'MiHonor': ['Samsung', 'Xiaomi', 'Redmi', 'Apple', 'iPhone', 'iPad'],
+            'YouTakeAll': ['Google', 'Samsung', 'Pixel', 'Apple', 'iPhone', 'AirPods'],
+            '112пав': ['iPhone', 'AirPods', 'iPad', 'Samsung', 'Xiaomi']
         }
 
-        stop_words = ['скидка', 'депозит', r'от \d+шт']
+        stop_words = ['скидка', 'депозит', r'от \d+шт', 'уценка']
 
         for word in stop_words:
             if re.search(word, product_name, re.IGNORECASE):
@@ -205,31 +221,33 @@ class DataProcessor:
                 for keyword in supplier_keywords[supplier]
             )
 
-        return True
+        return len(product_name) > 3
 
     def _match_suppliers(self, supplier_data: List[Dict], product_dict: List[str], product_name: str) -> List[Dict]:
-        """Сопоставляет товары поставщиков с товарами магазина с использованием расстояния Левенштейна."""
+        """Сопоставляет товары поставщиков с товарами магазина."""
         matched = []
-
         keywords = self._clean_keywords(product_name)
 
+        # Извлекаем характеристики (например, цвет, объём памяти)
         memory_pattern = re.search(r'(\d+/\d+)\s*(?:GB|ГБ)', product_name, re.IGNORECASE)
         memory_config = memory_pattern.group(1) if memory_pattern else None
 
         color_pattern = re.search(r'\b(black|white|blue|red|green|silver|gold)\b', product_name, re.IGNORECASE)
         color = color_pattern.group(0) if color_pattern else None
 
-        potential_matches = []
         for supplier_product in supplier_data:
             supplier_name = supplier_product['Название'].lower()
 
+            # Используем расстояние Левенштейна для сравнения названий
             similarity = SequenceMatcher(None, product_name.lower(), supplier_name).ratio()
 
+            # Считаем совпадения ключевых слов
             keyword_matches = sum(
                 keyword in supplier_name
                 for keyword in keywords
             )
 
+            # Проверяем совпадение характеристик (память, цвет)
             memory_match = (
                     memory_config and
                     memory_config in supplier_name
@@ -240,28 +258,16 @@ class DataProcessor:
                     color in supplier_name
             ) if color else False
 
+            # Вычисляем общий score
             match_score = (
-                    similarity * 0.6 +
-                    keyword_matches * 0.3 +
-                    (memory_match * 0.05) +
-                    (color_match * 0.05)
+                    similarity * 0.7 +  # Увеличиваем вес схожести
+                    keyword_matches * 0.2 +  # Уменьшаем вес ключевых слов
+                    (memory_match * 0.05) +  # Учитываем память
+                    (color_match * 0.05)  # Учитываем цвет
             )
 
-            if match_score > 0.4:
-                potential_matches.append({
-                    'product': supplier_product,
-                    'score': match_score
-                })
-
-        if potential_matches:
-            sorted_matches = sorted(
-                potential_matches,
-                key=lambda x: x['score'],
-                reverse=True
-            )
-
-            best_match = sorted_matches[0]
-            matched.append(best_match['product'])
+            if match_score > 0.6:  # Повышаем порог
+                matched.append(supplier_product)
 
         return matched
 
@@ -270,6 +276,7 @@ class DataProcessor:
         """Очищает ключевые слова от лишних символов и разделяет значения по слешу."""
         product_name = re.sub(r'\s\d{4,5}\s*(?:₽|руб|rub|\$)?$', '', product_name)
 
+        # Удаляем "+", если он окружен пробелами
         product_name = re.sub(r'\s\+\s', ' ', product_name)
 
         parts = re.split(r'[/]', product_name)
@@ -278,11 +285,48 @@ class DataProcessor:
             part = re.sub(r'[^\w\s.+]', '', part)
             keywords.extend([word.strip().lower() for word in part.split() if word.strip()])
 
+        # Добавляем синонимы
         synonyms = {
             'type-c': 'usb-c',
             'wi-fi': 'wifi',
-            'cellular': 'lte'
+            'cellular': 'lte',
+            'iphone': 'apple',
+            'ipad': 'apple',
+            'airpods': 'apple'
         }
         keywords = [synonyms.get(word, word) for word in keywords]
 
         return keywords
+
+    @staticmethod
+    def _extract_price_at_end(row: Dict, product_name: str) -> int | None:
+        """Извлечение цены с ориентиром на конец строки."""
+        price_patterns = [
+            r'(\d{4,5})\s*(?:₽|руб|rub|\$)?$',  # Цена в конце строки
+            r'\s(\d{4,5})\s*(?:₽|руб|rub|\$)$',  # С пробелом перед ценой
+        ]
+
+        for pattern in price_patterns:
+            match = re.search(pattern, product_name)
+            if match:
+                try:
+                    price = int(match.group(1))
+                    if 1000 <= price <= 300000:
+                        # Удаляем цену из названия
+                        product_name = re.sub(pattern, '', product_name).strip()
+                        return price
+                except (ValueError, TypeError):
+                    continue
+
+        # Резервный метод извлечения цены из столбцов
+        price_columns = ['Цена', 'цена', 'price', 'Price']
+        for col in price_columns:
+            if col in row and row[col]:
+                try:
+                    price = int(str(row[col]).replace(' ', ''))
+                    if 1000 <= price <= 300000:
+                        return price
+                except (ValueError, TypeError):
+                    continue
+
+        return None
