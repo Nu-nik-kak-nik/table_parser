@@ -12,6 +12,10 @@ class DictionaryHandler:
         self.file_path = file_path
         self.logger = Logger(__name__)
         self.dictionaries = self._load_dictionaries()
+        self.stop_words = {
+            "смартфон", "планшет", "телефон", "часы", "watch", "phone",
+            "smartphone", "tablet", "mobile", "мобильный", "гаджет", "устройство"
+        }
 
     def _load_dictionaries(self):
         """Загружает словарь из JSON-файла. Если файл пустой или отсутствует, возвращает пустой словарь."""
@@ -32,21 +36,29 @@ class DictionaryHandler:
             return {}
 
     def save_dictionaries(self):
-        """Сохраняет словарь в JSON-файл."""
+        """Сохраняет словарь в JSON-файл, предварительно очищая ключевые слова и удаляя стоп-слова."""
+        cleaned_dictionaries = {}
+        for product_name, keywords in self.dictionaries.items():
+            cleaned_keywords = self._clean_keywords(product_name, self.stop_words)
+            cleaned_dictionaries[product_name] = cleaned_keywords
+
         with open(self.file_path, 'w', encoding='utf-8') as file:
-            json.dump(self.dictionaries, file, indent=4, ensure_ascii=False)
+            json.dump(cleaned_dictionaries, file, indent=4, ensure_ascii=False)
 
     @staticmethod
-    def _clean_keywords(product_name: str) -> List[str]:
-        """Очищает ключевые слова от лишних символов и извлекает содержимое скобок."""
-        brackets_content = re.findall(r'\((.*?)\)', product_name)
-        product_name = re.sub(r'\(.*?\)', '', product_name)
+    def _clean_keywords(product_name: str, stop_words: set) -> List[str]:
+        """Очищает ключевые слова от лишних символов и удаляет стоп-слова."""
+        product_name = re.sub(r'\s\d{4,5}\s*(?:₽|руб|rub|\$)?$', '', product_name)
 
-        cleaned = re.sub(r'[(),]', ' ', product_name)
-        keywords = [word.strip().lower() for word in cleaned.split() if word.strip()]
+        product_name = re.sub(r'\s\+\s', ' ', product_name)
 
-        for content in brackets_content:
-            keywords.extend([word.strip().lower() for word in content.split() if word.strip()])
+        parts = re.split(r'[/]', product_name)
+        keywords = []
+        for part in parts:
+            part = re.sub(r'[^\w\s.+]', '', part)
+            keywords.extend([word.strip().lower() for word in part.split() if word.strip()])
+
+        keywords = [word for word in keywords if word not in stop_words]
 
         return keywords
 
@@ -76,9 +88,9 @@ class DictionaryHandler:
         return list(variations)
 
     def get_dictionary(self, product_name: str) -> List[str]:
-        """Возвращает словарь ключевых слов для товара."""
+        """Возвращает словарь ключевых слов для товара, исключая стоп-слова."""
         if product_name not in self.dictionaries:
-            keywords = self._clean_keywords(product_name)
+            keywords = self._clean_keywords(product_name, self.stop_words)
             variations = set(keywords)
             variations.update(self._add_transliterations(keywords))
             self.dictionaries[product_name] = list(variations)
@@ -95,4 +107,3 @@ class DictionaryHandler:
             self.logger.info(f"Словарь для товара '{product_name}' успешно обновлен.")
         else:
             self.logger.warning(f"Товар '{product_name}' не найден в словаре.")
-
