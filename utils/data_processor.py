@@ -221,7 +221,6 @@ class DataProcessor:
         unique_suppliers = {}
         keywords = self._clean_keywords(product_name)
 
-        # Извлечение цвета из названия магазина
         shop_color = self._extract_color(product_name)
 
         memory_pattern = re.search(r'(\d+/\d+)\s*(?:GB|ГБ)', product_name, re.IGNORECASE)
@@ -243,11 +242,10 @@ class DataProcessor:
                     memory_config in supplier_name
             ) if memory_config else False
 
-            # Проверка совпадения цветов
             color_match = (
-                    shop_color is None or  # Если цвет не указан в магазине
-                    supplier_color is None or  # Если цвет не указан у поставщика
-                    self._colors_match(shop_color, supplier_color)  # Точное совпадение цветов
+                    shop_color is None or
+                    supplier_color is None or
+                    self._colors_match(shop_color, supplier_color)
             )
 
             match_score = (
@@ -262,26 +260,21 @@ class DataProcessor:
                     'match_score': match_score
                 })
 
-        # Сортировка по match_score и ограничение до 10 лучших
         matched = sorted(matched, key=lambda x: x['match_score'], reverse=True)[:10]
 
         for item in matched:
             supplier = item.get('Поставщик')
 
-            # Если такого поставщика еще нет
             if supplier not in unique_suppliers:
                 unique_suppliers[supplier] = item
             else:
-                # Сравниваем по количеству совпадений, а не по цене
                 current_match_score = len(set(product_dict) & set(item.get('Описание', '').split()))
                 existing_match_score = len(
                     set(product_dict) & set(unique_suppliers[supplier].get('Описание', '').split()))
 
-                # Обновляем, если новое предложение лучше совпадает
                 if current_match_score > existing_match_score:
                     unique_suppliers[supplier] = item
 
-        # Возвращаем список ВСЕХ уникальных предложений
         return list(unique_suppliers.values())
 
     @staticmethod
@@ -344,13 +337,12 @@ class DataProcessor:
     def _extract_color(text: str) -> Optional[str]:
         """Извлекает цвет из текста."""
         color_patterns = [
-            r'\(([^)]+)\)',  # В скобках
-            r'\s([^\s]+)$',  # После последнего пробела
-            r'\s([^\s]+)\s*(?:EAC|RU|EU)'  # Перед сертификатами
+            r'\(([^)]+)\)',
+            r'\s([^\s]+)$',
+            r'\s([^\s]+)\s*(?:EAC|RU|EU)'
         ]
 
         color_mapping = {
-            # Русские цвета
             'серый': ['grey', 'gray', 'titanium', 'графит'],
             'черный': ['black', 'space black', 'космический черный'],
             'белый': ['white', 'silver'],
@@ -367,7 +359,6 @@ class DataProcessor:
             if match:
                 color = match.group(1).strip().lower()
 
-                # Проверка на прямое совпадение
                 for russian, variants in color_mapping.items():
                     if color == russian.lower() or color in [v.lower() for v in variants]:
                         return russian
@@ -384,10 +375,25 @@ class DataProcessor:
             'серый': ['grey', 'gray', 'titanium', 'графит'],
             'черный': ['black', 'space black', 'космический черный'],
             'белый': ['white', 'silver'],
-            # Другие цвета...
+            'синий': ['blue', 'navy'],
+            'зеленый': ['green', 'forest green'],
+            'красный': ['red', 'crimson'],
+            'золотой': ['gold', 'champagne'],
+            'розовый': ['pink', 'rose gold'],
+            'фиолетовый': ['purple', 'lavender'],
+
+            'grey': ['серый', 'titanium', 'графит'],
+            'gray': ['серый', 'titanium', 'графит'],
+            'black': ['черный', 'космический черный'],
+            'white': ['белый', 'silver'],
+            'blue': ['синий'],
+            'green': ['зеленый'],
+            'red': ['красный'],
+            'gold': ['золотой', 'champagne'],
+            'pink': ['розовый'],
+            'purple': ['фиолетовый']
         }
 
-        # Проверка на прямое совпадение или наличие общих синонимов
         return (
                 color1 == color2 or
                 color1.lower() in color_mapping.get(color2, []) or
